@@ -1,0 +1,13 @@
+
+
+
+
+create 'm1', 
+{NAME => 'open', VERSIONS => 300}, 
+{NAME => 'close', VERSIONS => 300},
+{NAME => 'high', VERSIONS => 300}, 
+{NAME => 'low', VERSIONS => 300}, 
+{NAME => 'volume', VERSIONS => 300},
+{NAME => 'adj', VERSIONS => 300}
+
+
