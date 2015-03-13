@@ -2,7 +2,7 @@
 
 
 
-create 'm1', 
+create 'm4', 
 {NAME => 'open', VERSIONS => 300}, 
 {NAME => 'close', VERSIONS => 300},
 {NAME => 'high', VERSIONS => 300}, 
@@ -10,4 +10,252 @@ create 'm1',
 {NAME => 'volume', VERSIONS => 300},
 {NAME => 'adj', VERSIONS => 300}
 
+//POPULATING WITH importtsv
 
+hadoop jar /usr/lib/hbase/hbase.jar importtsv -Dimporttsv.columns=HBASE_ROW_KEY,open:price,high:price,low:price,close:price,volume:totals,adj:totals,HBASE_TS_KEY m4 /tmp/NASDAQ_daily_prices_subset_RK-emp.tsv
+
+
+
+
+
+
+//Con PrefixFilter devolvemos todos los KeyValue de la fila que tenga este prefijo <row_prefix>, en este caso limitamos a las dos últimas versiones
+//It returns only those key-values present in a row that starts with the specified row prefix
+scan 'm1', {
+TIMERANGE => [0,1001314800000],
+VERSIONS => 2,
+FILTER => "(PrefixFilter ('DXPE'))"
+}
+
+//ColumnPrefixFilter
+// It returns only those key-values present in a column that starts with the specified column prefix. The column prefix must be of the form qualifier
+//es decirl si el qualifier empieza por el parámetro, devuelve el key-value
+//ColumnPrefixFilter(<column_prefix>)
+scan 'm1', {
+TIMERANGE => [0,1001314800000],
+VERSIONS => 2,
+FILTER => "(PrefixFilter ('DXPE')) OR (ColumnPrefixFilter ('totals'))"
+}
+
+//MultipleColumnPrefixFilter
+//Lo mismo pero le pasamos varios
+//MultipleColumnPrefixFilter(<column_prefix>,<column_prefix>,….<column_prefix>)
+scan 'm1', {
+TIMERANGE => [0,1001314800000],
+VERSIONS => 2,
+FILTER => "(PrefixFilter ('DXPE')) AND (MultipleColumnPrefixFilter ('totals'))"
+}
+
+//ColumnCountGetFilter... sacamos los movimientos de DXPE y DELL, limitando a 3 valores. Al poner este filtro solo se devuelve la última versión
+scan 'm1', {
+TIMERANGE => [0,1001314800000],
+VERSIONS => 10,
+FILTER => "((PrefixFilter ('DXPE')) OR PrefixFilter ('DELL'))) AND (ColumnCountGetFilter (3))"
+}
+
+///KeyOnlyFilter()---> No toma argumentos, con esto sólo le decimos que no saque el valor
+scan 'm1', 
+{
+TIMERANGE => [0,1001314800000],
+VERSIONS => 10,
+FILTER => "(PrefixFilter ('DXPE')) AND (KeyOnlyFilter ())"
+}
+
+///FirstKeyOnlyFilter()---> No toma argumentos, saca solo el primer keyvalue correspondiente a cada fila
+scan 'm1', 
+{
+TIMERANGE => [0,1001314800000],
+VERSIONS => 10,
+FILTER => "( (FirstKeyOnlyFilter ())"
+}
+
+
+///PageFilter
+Paginación a nivel de fila, no tiene offset, devuelve ese número de filas de la tabla
+scan 'm1', 
+{
+TIMERANGE => [0,1001314800000],
+VERSIONS => 3,
+FILTER => "((PageFilter (4)) OR (ColumnCountGetFilter(3))"
+}
+
+///ColumnPaginationFilter(limit, offset)---> Varias columns por fila tras saltarse un offset
+//Es como ColumnCountGetFilter solo que además hace el offset, para paginar
+***Primeras 4 columnas
+scan 'm1', {
+TIMERANGE => [0,1001314800000],
+VERSIONS => 3,
+FILTER => "(PrefixFilter ('DXPE') AND (ColumnPaginationFilter (4, 0))"
+}
+
+
+scan 'm1', 
+{
+TIMERANGE => [0,1001314800000],
+VERSIONS => 10,
+FILTER => "(PrefixFilter ('DXPE') AND ((ColumnPaginationFilter (1, 3) OR (ColumnPaginationFilter (1, 1)))"
+}
+
+//InclusiveStopFilter
+//This filter takes one argument  a row key on which to stop scanning. It returns all key-values present in rows up to and including the specified row.
+//InclusiveStopFilter(<stop_row_key>)
+scan 'm1',
+{
+TIMERANGE => [0,1001314800000],
+VERSIONS => 10,
+FILTER => "(InclusiveStopFilter('DXPE') AND (FirstKeyOnlyFilter ())"
+}
+
+//Family Filter(Qualifier Filter)
+//This filter takes a compare operator and a comparator. It compares each qualifier name with the comparator using the compare operator and if the comparison returns true, it returns all the key-values in that column.
+//QualifierFilter (<compareOp>, <qualifier_comparator>)
+
+
+//Count --> Cuenta filas, luego habrá las versiones que haya o las columnas que sean
+//Recupera resultados
+//Cachea localmente
+//Hacer la acción que le indicamos, COUNS es CONTAR
+//Con Interval decimos cada cuántas rows tenemos que hacer contéo de celdas
+
+count 'm1', 
+CACHE => 10, 
+INTERVAL => 10
+
+//CACHE =>10, implica, coge las 10 primeras filas y cuenta, las 10 segundas y cuenta... etc etc
+//Con INTERVAL va dando resultados parciales
+//El CACHE es muy importante en el performance, número de llamadas que hace por resultset
+//cada cacheo impli
+//Aunque son llamadas rápidas, son llamadas a RPC, si no cachea, cada resultado es una llamada
+//Una llamada por cada uno
+//yo te llamo, te digo lo que hay que hacer, y cacheas un paquete
+//te traes un montón de comandos de golpe
+//Caché = 0 tarda mucho más
+//En este caso, solo llama 10 veces, si no cacheas, 97 veces porque hay 97 filas
+//el caché al final es memoria, traerse millones de columnas no es la opción, solo algo razonable
+//
+
+//ADMINISTRACIÓN
+//hbck, es como es fsck, para hacer un chequéo del filesystem
+sudo -u hbase hbase hbck -details
+
+
+flush 'm4'
+//Con esto los datos pasan del memstore (memoria) al HDFS (disco)
+//Al hacer shutdown, se persiste automátimaente, si se cae el sistema, hay que recuperar de los WAL (operación manual)
+//hace falta en general flush para que los datos se persistan a disco
+
+disable 'm4'
+drop 'm4'
+//Hay que hacer disable y luego drop
+//Al hacer esto, miramos en el HDFS y no hay rastro de HBASE/m4 y sus subdirectorios
+
+
+hadoop fs -ls -R /hbase/m1
+//para ver toda la estructura de la tabla
+hbase hfile -mbsv -f /hbase/m1/5e177799c144bc4d3b463576333d7e90/adj/69f58bcffcbb4995b7180ec674dd6b74
+//Con esto vemos un análisis del contenido del HFile donde se ven estadísticas de las key, de los value, de los índices,...
+//muy útil block index te da mucha info de lo que hay; puede ser que lo que buscas no esté porque no se ha compactado
+//La compactación es una tarea muy pesada para hacer en determinados momentos
+//El block index aumenta la eficiencia de las búsquedas concretas de k por separado.... tiene un offset en bytes
+//mira en el Store File si está la RK que buscamos
+//Si tuviéramos muchos Region Server, habria parte de las RK
+//Las compactaciones ponen todo en orden
+//Mientras tienes distintos store files
+//al final tienes que escanear cada store file en el que la clave puede estar
+//la reconfiguración se suele hacer
+//Block Index escanea los primeros, el escáner verá si puede estar y si no pasa directamente a otro Store File
+
+
+hbase org.apache.hadoop.hbase.HBaseConfiguration
+hadoop org.apache.hadoop.conf.Configuration
+
+
+
+hadoop jar /usr/lib/hbase/hbase.jar export m1 /tmp/test 300
+//
+
+hadoop jar /usr/lib/hbase/hbase.jar import m2 /tmp/test
+
+
+Dividir una región
+*******************************
+
+La tabla ROOT desaparee en 0.96
+Se cambia por una estructura en Zookeeper, en ZK está el Mapeo de la tabla Meta
+
+scan '.META.', COLUMNS => 'info:regioninfo'
+
+m1,,1404180964770.e886759e73ad95b431a7f66d9645e1e8. 
+column=info:regioninfo, 
+timestamp=1404180964935, 
+value={
+NAME => 'm1,,1404180964770.e886759e73ad95b431a7f66d9645e1e8.',   //NOMBRE, PRIMERA ROWKEY de LA REGION, ALGO.ENCODEDREGION
+STARTKEY => '', 
+ENDKEY => '', 
+ENCODED => e886759e73ad95b431a7f66d9645e1e8,}  
+
+m2,,1404429810793.52950821bcda4c90d65ee20ad182ee19.
+column=info:regioninfo, timestamp=1404429811003, 
+value={NAME => 'm2,,1404429810793.52950821bcda4c90d65ee20ad182ee19.', 
+STARTKEY => '',   //esta en blanco porque es la primera, no offset
+ENDKEY => '',    //está en blanco porque es la última también
+ENCODED => 52950821bcda4c90d65ee20ad182ee19,}    ///ENCODED REGION NAME
+
+split 'm1,,1404180964770.e886759e73ad95b431a7f66d9645e1e8.'
+
+
+
+UPDATES Y DELETES
+  No existen en HBASE
+  Un update es selecciono una versión creo una nueva versión y el compactador al compactar borrará la vieja porque solo has pedido una versión
+  Delete marca la celda como borrada pero no la borra
+    Si uso muchos deletes explícitos, es un problema porque mientras la compactación no ha tenido lugar genera ruido al hacer consultas
+      Porque la celda todavía sigue ahí
+      
+      
+delete 'm1','DXPE','open:price',905410800000
+scan 'm1', {TIMERANGE => [0,1001314800000], RAW => true, VERSIONS => 100, FILTER => "(PrefixFilter ('DXPE') AND (FamilyFilter (=, 'regexstring:open')) AND (QualifierFilter (=, 'regexstring:price')))"}
+//Vemos que sigue existiendo y se ha creado una en paralelo type=delete
+flush 'm1'      
+major_compact 'm1'
+
+
+COMPRESIÓN
+Es crítica en HBASE
+Se recomienda comprimir siempre. Lleva su tiempo, en HBASE la ganancia en tiempo moviendo los datos en RPC hace una ganancia mucho mayor
+El seek sobre el dato es mucho más rápido
+Por mucho tiempo que eches comprimiendo
+  gz, totalmente libre, pero el consumo de CPU ya no compensa. El mejor Snappy.
+  snappy, propiedad de Google, si te deja incluirlo en tu licencia genial, y si no Hadoop con los conectores de Snappy y tan felices
+  LZO, también es propietario
+  
+  create 'm6', {NAME => 'open', VERSIONS => 300, COMPRESSION => 'gz'}, 
+  {NAME => 'close', VERSIONS => 300, COMPRESSION => 'gz'}, 
+  {NAME => 'high', VERSIONS => 300, COMPRESSION => 'gz'}, 
+  {NAME => 'low', VERSIONS => 300, COMPRESSION => 'gz'}, 
+  {NAME => 'volume', VERSIONS => 300, COMPRESSION => 'gz'},
+  {NAME => 'adj', VERSIONS => 300, COMPRESSION => 'gz'}
+
+hadoop jar /usr/lib/hbase/hbase.jar import m6 /tmp/test
+
+flush 'm6'
+
+hadoop fs -du /hbase/m6
+
+hbase hfile -mbsv -f /hbase/m6/7c9fffe6ca70a7b505f9e9d99f698c62/open/c421878247414283b5da347d66f16af4
+
+UPDATE
+Es una nueva celda
+  Si hay muchas versiones será una versión más
+  
+  Se generan nuevos Store File
+    Los nuevos tienen la actualización de los datos.
+
+
+major_compact 'm5'
+//Lo lanza en background
+//Al cabo de un rato vemos los distintos Region Server con los StoreFile compactados
+
+
+
+ju
